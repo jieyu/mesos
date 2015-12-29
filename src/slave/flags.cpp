@@ -143,6 +143,11 @@ mesos::internal::slave::Flags::Flags()
       "Directory the appc provisioner will store images in.\n",
       path::join(os::temp(), "mesos", "store", "appc"));
 
+  add(&Flags::cvmfs_root,
+      "cvmfs_root",
+      "Path to the CVMFS root directory.",
+      "/cvmfs");
+
   add(&Flags::docker_registry,
       "docker_registry",
       "The default url for pulling Docker images. It could either be a Docker\n"
