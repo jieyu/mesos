@@ -623,6 +623,7 @@ libmesos_no_3rdparty_la_SOURCES +=					\
   slave/containerizer/mesos/provisioner/appc/spec.cpp			\
   slave/containerizer/mesos/provisioner/appc/store.cpp			\
   slave/containerizer/mesos/provisioner/backends/copy.cpp		\
+  slave/containerizer/mesos/provisioner/cvmfs/store.cpp			\
   slave/containerizer/mesos/provisioner/docker/local_puller.cpp		\
   slave/containerizer/mesos/provisioner/docker/metadata_manager.cpp	\
   slave/containerizer/mesos/provisioner/docker/paths.cpp		\
@@ -731,6 +732,7 @@ libmesos_no_3rdparty_la_SOURCES +=					\
   slave/containerizer/mesos/provisioner/appc/spec.hpp			\
   slave/containerizer/mesos/provisioner/appc/store.hpp			\
   slave/containerizer/mesos/provisioner/backends/copy.hpp		\
+  slave/containerizer/mesos/provisioner/cvmfs/store.hpp			\
   slave/containerizer/mesos/provisioner/docker/local_puller.hpp		\
   slave/containerizer/mesos/provisioner/docker/message.hpp		\
   slave/containerizer/mesos/provisioner/docker/metadata_manager.hpp	\

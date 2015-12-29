@@ -1290,6 +1290,7 @@ message Image {
   enum Type {
     APPC = 1;
     DOCKER = 2;
+    CVMFS = 3;
   }
 
   // Protobuf for specifying an Appc container image. See:
@@ -1316,12 +1317,18 @@ message Image {
     required string name = 1;
   }
 
+  message Cvmfs {
+    required string repository = 1;
+    required string path = 2;
+  }
+
   required Type type = 1;
 
   // Only one of the following image messages should be set to match
   // the type.
   optional Appc appc = 2;
   optional Docker docker = 3;
+  optional Cvmfs cvmfs = 4;
 }
 
 

@@ -118,6 +118,11 @@ mesos::internal::slave::Flags::Flags()
       "Directory the appc provisioner will store images in.",
       "/tmp/mesos/store/appc");
 
+  add(&Flags::cvmfs_root,
+      "cvmfs_root",
+      "Path to the CVMFS root directory.",
+      "/cvmfs");
+
   add(&Flags::docker_auth_server,
       "docker_auth_server",
       "Docker authentication server",

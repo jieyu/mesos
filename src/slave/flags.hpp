@@ -50,6 +50,7 @@ public:
   Option<std::string> image_providers;
   std::string image_provisioner_backend;
   std::string appc_store_dir;
+  std::string cvmfs_root;
 
   std::string docker_auth_server;
   std::string docker_auth_server_port;
