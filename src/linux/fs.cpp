@@ -562,21 +562,19 @@ Try<Nothing> enter(const string& root)
     return Error("Failed to create devices: " + create.error());
   }
 
-  // Create a /tmp directory if it doesn't exist.
-  // TODO(idownes): Consider mounting a tmpfs to /tmp.
   if (!os::exists(path::join(root, "tmp"))) {
-    Try<Nothing> mkdir = os::mkdir(path::join(root, "tmp"));
-     if (mkdir.isError()) {
-       return Error("Failed to create /tmp in chroot: " + mkdir.error());
-     }
+    return Error("/tmp in chroot does not exist");
+  }
 
-     Try<Nothing> chmod = os::chmod(
-         path::join(root, "tmp"),
-         S_IRWXU | S_IRWXG | S_IRWXO | S_ISVTX);
+  mount = fs::mount(
+      "tmpfs",
+      path::join(root, "tmp"),
+      "tmpfs",
+      MS_NOSUID | MS_NODEV,
+      "mode=1777");
 
-     if (chmod.isError()) {
-       return Error("Failed to set mode on /tmp: " + chmod.error());
-     }
+  if (mount.isError()) {
+    return Error("Failed to mount tmpfs for /tmp in chroot: " + mount.error());
   }
 
   // Create a mount point for the old root.
@@ -638,6 +636,11 @@ Try<Nothing> enter(const string& root)
   // ignore.
   // Check status when we stop using lazy umounts.
   os::rmdir(relativeOld);
+
+  Try<Nothing> unmount = fs::unmount("/tmp");
+  if (unmount.isError()) {
+    return Error("Failed to umount /tmp in the chroot: " + unmount.error());
+  }
 
   return Nothing();
 }
