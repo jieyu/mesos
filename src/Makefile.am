@@ -1806,6 +1806,7 @@ mesos_tests_SOURCES +=						\
   tests/containerizer/memory_pressure_tests.cpp			\
   tests/containerizer/ns_tests.cpp				\
   tests/containerizer/perf_tests.cpp				\
+  tests/containerizer/provisioner_cvmfs_tests.cpp		\
   tests/containerizer/sched_tests.cpp				\
   tests/containerizer/setns_test_helper.cpp
 endif
