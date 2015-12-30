@@ -207,6 +207,10 @@ public:
         "Comma separated list of optional framework capabilities to enable.\n"
         "(the only valid value is currently 'GPU_RESOURCES')");
 
+    add(&Flags::cvmfs_image,
+        "cvmfs_image",
+        "CVMFS repository and path (e.g., mesosphere.com/precise).");
+
     add(&Flags::containerizer,
         "containerizer",
         "Containerizer to be used (i.e., docker, mesos).",
@@ -296,6 +300,7 @@ public:
   Option<string> docker_image;
   Option<std::set<string>> framework_capabilities;
   Option<JSON::Array> volumes;
+  Option<string> cvmfs_image;
   string containerizer;
   Option<CapabilityInfo> capabilities;
   string role;
@@ -668,6 +673,7 @@ static Result<ContainerInfo> getContainerInfo(
     const Option<string>& networks,
     const Option<string>& appcImage,
     const Option<string>& dockerImage,
+    const Option<string>& cvmfsImage,
     const Option<CapabilityInfo>& capabilities)
 {
   if (containerizer.empty()) {
@@ -687,6 +693,7 @@ static Result<ContainerInfo> getContainerInfo(
     if (appcImage.isNone() &&
         capabilities.isNone() &&
         dockerImage.isNone() &&
+        cvmfsImage.isNone() &&
         (networks.isNone() || networks->empty()) &&
         (volumes.isNone() || volumes->empty())) {
       return None();
@@ -722,6 +729,18 @@ static Result<ContainerInfo> getContainerInfo(
       Image* image = containerInfo.mutable_mesos()->mutable_image();
       image->set_type(Image::APPC);
       image->mutable_appc()->CopyFrom(appc);
+    } else if (cvmfsImage.isSome()) {
+      vector<string> tokens = strings::tokenize(cvmfsImage.get(), "/");
+      if (tokens.size() != 2) {
+        return Error("Invalid CVMFS image '" + cvmfsImage.get() + "'");
+      }
+
+      Image* image = containerInfo.mutable_mesos()->mutable_image();
+      image->set_type(Image::CVMFS);
+
+      Image::Cvmfs* cvmfs = image->mutable_cvmfs();
+      cvmfs->set_repository(tokens[0]);
+      cvmfs->set_path(tokens[1]);
     }
 
     if (networks.isSome() && !networks->empty()) {
@@ -913,8 +932,15 @@ int main(int argc, char** argv)
     dockerImage = flags.docker_image.get();
   }
 
-  if (appcImage.isSome() && dockerImage.isSome()) {
-    cerr << "Flags '--docker-image' and '--appc-image' are both set" << endl;
+  Option<string> cvmfsImage;
+  if (flags.cvmfs_image.isSome()) {
+    cvmfsImage = flags.cvmfs_image.get();
+  }
+
+  if ((appcImage.isSome() && dockerImage.isSome()) ||
+      (appcImage.isSome() && cvmfsImage.isSome()) ||
+      (dockerImage.isSome() && cvmfsImage.isSome())) {
+    cerr << "More than one images are specified" << endl;
     return EXIT_FAILURE;
   }
 
@@ -1040,6 +1066,7 @@ int main(int argc, char** argv)
         flags.networks,
         appcImage,
         dockerImage,
+        cvmfsImage,
         flags.capabilities);
 
     if (containerInfo.isError()){
