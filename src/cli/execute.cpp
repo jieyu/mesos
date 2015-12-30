@@ -113,6 +113,10 @@ public:
         "Docker image that follows the Docker CLI naming <image>:<tag>."
         "(ie: ubuntu, busybox:latest).");
 
+    add(&cvmfs_image,
+        "cvmfs_image",
+        "CVMFS repository and path (e.g., mesosphere.com/precise).");
+
     add(&containerizer,
         "containerizer",
         "Containerizer to be used (ie: docker, mesos)",
@@ -130,6 +134,7 @@ public:
   bool overwrite;
   bool checkpoint;
   Option<string> docker_image;
+  Option<string> cvmfs_image;
   string containerizer;
 };
 
@@ -144,6 +149,7 @@ public:
       const string& _resources,
       const Option<string>& _uri,
       const Option<string>& _dockerImage,
+      const Option<string>& _cvmfsImage,
       const string& _containerizer)
     : name(_name),
       command(_command),
@@ -151,6 +157,7 @@ public:
       resources(_resources),
       uri(_uri),
       dockerImage(_dockerImage),
+      cvmfsImage(_cvmfsImage),
       containerizer(_containerizer),
       launched(false) {}
 
@@ -244,6 +251,34 @@ public:
           task.mutable_container()->CopyFrom(containerInfo);
         }
 
+        if (cvmfsImage.isSome()) {
+          ContainerInfo container;
+
+          if (containerizer == "mesos") {
+            vector<string> tokens = strings::tokenize(cvmfsImage.get(), "/");
+            if (tokens.size() != 2) {
+              cerr << "Invalid CVMFS image: " << cvmfsImage.get() << endl;
+              driver->abort();
+              return;
+            }
+
+            container.set_type(ContainerInfo::MESOS);
+
+            Image* image = container.mutable_mesos()->mutable_image();
+            image->set_type(Image::CVMFS);
+
+            Image::Cvmfs* cvmfs = image->mutable_cvmfs();
+            cvmfs->set_repository(tokens[0]);
+            cvmfs->set_path(tokens[1]);
+          } else {
+            cerr << "Unsupported containerizer: " << containerizer << endl;
+            driver->abort();
+            return;
+          }
+
+          task.mutable_container()->CopyFrom(container);
+        }
+
         vector<TaskInfo> tasks;
         tasks.push_back(task);
 
@@ -301,6 +336,7 @@ private:
   const string resources;
   const Option<string> uri;
   const Option<string> dockerImage;
+  const Option<string> cvmfsImage;
   const string containerizer;
   bool launched;
 };
@@ -434,6 +470,7 @@ int main(int argc, char** argv)
       flags.resources,
       uri,
       dockerImage,
+      flags.cvmfs_image,
       flags.containerizer);
 
   FrameworkInfo framework;
