@@ -228,7 +228,7 @@ Future<hashset<ContainerID>> LinuxLauncher::recover(
 // NOTE: The child process is blocked by the hook infrastructure while
 // these hooks are executed.
 // NOTE: Returning an Error implies the child process will be killed.
-Try<Nothing> assignFreezerHierarchy(
+static Try<Nothing> assignFreezerHierarchy(
     pid_t child,
     const string& hierarchy,
     const string& cgroup)
