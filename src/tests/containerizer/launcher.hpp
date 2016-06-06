@@ -68,7 +68,7 @@ public:
           const Option<flags::FlagsBase>& flags,
           const Option<std::map<std::string, std::string> >& env,
           const Option<int>& namespaces,
-          std::vector<process::Subprocess::Hook> parentHooks));
+          const std::vector<process::Subprocess::Hook>& parentHooks));
 
   MOCK_METHOD1(
       destroy,

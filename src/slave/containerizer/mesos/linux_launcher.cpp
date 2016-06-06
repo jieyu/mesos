@@ -263,6 +263,26 @@ static Try<Nothing> assignFreezerHierarchy(
 }
 
 
+static Try<Nothing> assignRootCgroups(pid_t child)
+{
+  Try<set<string>> hierarchies = cgroups::hierarchies();
+  if (hierarchies.isError()) {
+    return Error("Failed to get all cgroup hierarchies: " +
+                 hierarchies.error());
+  }
+
+  foreach (const string& hierarchy, hierarchies.get()) {
+    Try<Nothing> assign = cgroups::assign(hierarchy, "/", child);
+    if (assign.isError()) {
+      return Error("Failed to assign process to the root cgroup of "
+                   "hierarchy '" + hierarchy + "': " + assign.error());
+    }
+  }
+
+  return Nothing();
+}
+
+
 Try<pid_t> LinuxLauncher::fork(
     const ContainerID& containerId,
     const string& path,
@@ -273,7 +293,7 @@ Try<pid_t> LinuxLauncher::fork(
     const Option<flags::FlagsBase>& flags,
     const Option<map<string, string>>& environment,
     const Option<int>& namespaces,
-    vector<Subprocess::Hook> parentHooks)
+    const vector<Subprocess::Hook>& _parentHooks)
 {
   int cloneFlags = namespaces.isSome() ? namespaces.get() : 0;
   cloneFlags |= SIGCHLD; // Specify SIGCHLD as child termination signal.
@@ -281,8 +301,17 @@ Try<pid_t> LinuxLauncher::fork(
   LOG(INFO) << "Cloning child process with flags = "
             << ns::stringify(cloneFlags);
 
-  // NOTE: Currently we don't care about the order of the hooks, as
-  // both hooks are independent.
+  vector<Subprocess::Hook> parentHooks;
+
+  // We move the child to the root cgroup for all hierarchies. This is
+  // to make sure the life time of the executor is totally decoupled
+  // from the agent. In particular, if the agent is running in a
+  // Docker container (with --pid=host), this step makes sure that the
+  // executor is not in any of the cgroup associated with the agent
+  // container. See more details in MESOS-5544.
+  parentHooks.emplace_back(Subprocess::Hook(lambda::bind(
+      &assignRootCgroups,
+      lambda::_1)));
 
   // If we are on systemd, then extend the life of the child. As with the
   // freezer, any grandchildren will also be contained in the slice.
@@ -296,6 +325,11 @@ Try<pid_t> LinuxLauncher::fork(
       lambda::_1,
       freezerHierarchy,
       cgroup(containerId))));
+
+  // Add additional parent Hooks.
+  foreach (const Subprocess::Hook& parentHook, _parentHooks) {
+    parentHooks.emplace_back(parentHook);
+  }
 
   Try<Subprocess> child = subprocess(
       path,

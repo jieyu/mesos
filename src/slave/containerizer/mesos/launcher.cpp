@@ -89,12 +89,14 @@ Try<pid_t> PosixLauncher::fork(
     const Option<flags::FlagsBase>& flags,
     const Option<map<string, string>>& environment,
     const Option<int>& namespaces,
-    vector<process::Subprocess::Hook> parentHooks)
+    const vector<Subprocess::Hook>& _parentHooks)
 {
   if (pids.contains(containerId)) {
     return Error("Process has already been forked for container " +
                  stringify(containerId));
   }
+
+  vector<Subprocess::Hook> parentHooks;
 
   // If we are on systemd, then extend the life of the child. Any
   // grandchildren's lives will also be extended.
@@ -103,6 +105,11 @@ Try<pid_t> PosixLauncher::fork(
     parentHooks.emplace_back(Subprocess::Hook(&systemd::mesos::extendLifetime));
   }
 #endif // __linux__
+
+  // Add additional parent Hooks.
+  foreach (const Subprocess::Hook& parentHook, _parentHooks) {
+    parentHooks.emplace_back(parentHook);
+  }
 
   Try<Subprocess> child = subprocess(
       path,

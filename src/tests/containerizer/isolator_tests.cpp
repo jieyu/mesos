@@ -124,6 +124,7 @@ enum CheckCgroups
   NO_CHECK_CGROUPS,
 };
 
+
 // A hook that is executed in the parent process. It attempts to isolate
 // a process and can optionally check the cgroups before and after isolation.
 //
