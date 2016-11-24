@@ -298,6 +298,10 @@ public:
   std::map<std::string, Option<std::string>> extract(
       const std::string& prefix) const;
 
+  // Export flags as environment variables.
+  std::map<std::string, std::string> exportEnvironment(
+      const Option<std::string>& prefix = None()) const;
+
 protected:
   // The program's name, extracted from argv[0] by default;
   // declared 'protected' so that derived classes can alter this
@@ -535,6 +539,26 @@ inline std::map<std::string, Option<std::string>> FlagsBase::extract(
   }
 
   return values;
+}
+
+
+inline std::map<std::string, std::string> FlagsBase::exportEnvironment(
+    const Option<std::string>& prefix) const
+{
+  std::map<std::string, std::string> result;
+
+  foreachvalue (const Flag& flag, flags_) {
+    Option<std::string> value = flag.stringify(*this);
+    if (value.isSome()) {
+      const std::string key = prefix.isSome()
+        ? prefix.get() + strings::upper(flag.effective_name().value)
+        : strings::upper(flag.effective_name().value);
+
+      result[key] = value.get();
+    }
+  }
+
+  return result;
 }
 
 
