@@ -191,6 +191,27 @@ message ContainerLaunchInfo {
   // (POSIX only) The rlimits requested for the container.
   // The rlimits are set while launching the container.
   optional RLimitInfo rlimits = 8;
+
+  // I/O information about the container to be launched.
+  message IOInfo {
+    message IO {
+      enum Type {
+        UNKNOWN = 0;
+        FD = 1;
+        PATH = 2;
+      }
+
+      optional Type type = 1;
+      optional int32 fd = 2;
+      optional string path = 3;
+    }
+
+    optional IO in = 1;
+    optional IO out = 2;
+    optional IO err = 3;
+  }
+
+  optional IOInfo io = 11;
 }
 
 

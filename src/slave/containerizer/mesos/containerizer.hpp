@@ -38,8 +38,6 @@
 
 #include "slave/containerizer/mesos/launcher.hpp"
 
-#include "slave/containerizer/mesos/io/switchboard.hpp"
-
 #include "slave/containerizer/mesos/provisioner/provisioner.hpp"
 
 #include "slave/containerizer/mesos/isolators/gpu/nvidia.hpp"
@@ -64,7 +62,6 @@ public:
   MesosContainerizer(
       const Flags& flags,
       Fetcher* fetcher,
-      const process::Owned<IOSwitchboard>& ioSwitchboard,
       const process::Owned<Launcher>& launcher,
       const process::Shared<Provisioner>& provisioner,
       const std::vector<process::Owned<mesos::slave::Isolator>>& isolators);
@@ -128,14 +125,12 @@ public:
   MesosContainerizerProcess(
       const Flags& _flags,
       Fetcher* _fetcher,
-      const process::Owned<IOSwitchboard>& _ioSwitchboard,
       const process::Owned<Launcher>& _launcher,
       const process::Shared<Provisioner>& _provisioner,
       const std::vector<process::Owned<mesos::slave::Isolator>>& _isolators)
     : ProcessBase(process::ID::generate("mesos-containerizer")),
       flags(_flags),
       fetcher(_fetcher),
-      ioSwitchboard(_ioSwitchboard),
       launcher(_launcher),
       provisioner(_provisioner),
       isolators(_isolators) {}
@@ -293,7 +288,6 @@ private:
 
   const Flags flags;
   Fetcher* fetcher;
-  const process::Owned<IOSwitchboard> ioSwitchboard;
   const process::Owned<Launcher> launcher;
   const process::Shared<Provisioner> provisioner;
   const std::vector<process::Owned<mesos::slave::Isolator>> isolators;

@@ -116,8 +116,6 @@ using std::set;
 using std::string;
 using std::vector;
 
-using mesos::internal::slave::IOSwitchboard;
-
 using mesos::internal::slave::state::SlaveState;
 using mesos::internal::slave::state::FrameworkState;
 using mesos::internal::slave::state::ExecutorState;
@@ -204,16 +202,11 @@ Try<MesosContainerizer*> MesosContainerizer::create(
   }
 #endif // __linux__
 
-  LOG(INFO) << "Using isolation: " << flags_.isolation;
-
-  // Create the container io switchboard for the MesosContainerizer.
-  Try<Owned<IOSwitchboard>> ioSwitchboard =
-    IOSwitchboard::create(flags_, local);
-
-  if (ioSwitchboard.isError()) {
-    return Error("Failed to create container io switchboard:"
-                 " " + ioSwitchboard.error());
+  if (!strings::contains(flags_.isolation, "io/switchboard")) {
+    flags_.isolation += ",io/switchboard";
   }
+
+  LOG(INFO) << "Using isolation: " << flags_.isolation;
 
   // Create the launcher for the MesosContainerizer.
   Try<Launcher*> launcher = [&flags_]() -> Try<Launcher*> {
@@ -284,6 +277,11 @@ Try<MesosContainerizer*> MesosContainerizer::create(
     // TODO(jieyu): Deprecate this in favor of using filesystem/linux.
     {"filesystem/shared", &SharedFilesystemIsolatorProcess::create},
 #endif // __linux__
+
+    {"io/switchboard",
+      [local] (const Flags& flags) -> Try<Isolator*> {
+        return IOSwitchboardIsolatorProcess::create(flags, local);
+      }},
 
     // Runtime isolators.
 #ifndef __WINDOWS__
@@ -393,7 +391,6 @@ Try<MesosContainerizer*> MesosContainerizer::create(
   return new MesosContainerizer(
       flags_,
       fetcher,
-      ioSwitchboard.get(),
       Owned<Launcher>(launcher.get()),
       provisioner,
       isolators);
@@ -403,14 +400,12 @@ Try<MesosContainerizer*> MesosContainerizer::create(
 MesosContainerizer::MesosContainerizer(
     const Flags& flags,
     Fetcher* fetcher,
-    const Owned<IOSwitchboard>& ioSwitchboard,
     const Owned<Launcher>& launcher,
     const Shared<Provisioner>& provisioner,
     const vector<Owned<Isolator>>& isolators)
   : process(new MesosContainerizerProcess(
       flags,
       fetcher,
-      ioSwitchboard,
       launcher,
       provisioner,
       isolators))
@@ -1251,7 +1246,59 @@ Future<bool> MesosContainerizerProcess::_launch(
       return Failure("Multiple isolators specify rlimits");
     }
 
+    if (isolatorLaunchInfo->has_io() &&
+        launchInfo.has_io()) {
+      return Failure("Multiple isolators specify io");
+    }
+
     launchInfo.MergeFrom(isolatorLaunchInfo.get());
+  }
+
+  // Determine the I/O for the container.
+  Option<Subprocess::IO> in;
+  Option<Subprocess::IO> out;
+  Option<Subprocess::IO> err;
+
+  if (launchInfo.has_io()) {
+    // TODO(jieyu): Close 'fd' on error before 'launcher->fork'.
+    switch (launchInfo.io().in().type()) {
+      case ContainerLaunchInfo::IOInfo::IO::FD:
+        in = Subprocess::FD(
+            launchInfo.io().in().fd(),
+            Subprocess::IO::OWNED);
+        break;
+      case ContainerLaunchInfo::IOInfo::IO::PATH:
+        in = Subprocess::PATH(launchInfo.io().in().path());
+        break;
+      default:
+        break;
+    }
+
+    switch (launchInfo.io().out().type()) {
+      case ContainerLaunchInfo::IOInfo::IO::FD:
+        out = Subprocess::FD(
+            launchInfo.io().out().fd(),
+            Subprocess::IO::OWNED);
+        break;
+      case ContainerLaunchInfo::IOInfo::IO::PATH:
+        out = Subprocess::PATH(launchInfo.io().out().path());
+        break;
+      default:
+        break;
+    }
+
+    switch (launchInfo.io().err().type()) {
+      case ContainerLaunchInfo::IOInfo::IO::FD:
+        err = Subprocess::FD(
+            launchInfo.io().err().fd(),
+            Subprocess::IO::OWNED);
+        break;
+      case ContainerLaunchInfo::IOInfo::IO::PATH:
+        err = Subprocess::PATH(launchInfo.io().err().path());
+        break;
+      default:
+        break;
+    }
   }
 
   // Remove duplicated entries in enter and clone namespaces.
@@ -1396,208 +1443,186 @@ Future<bool> MesosContainerizerProcess::_launch(
     executorInfo = containers_[rootContainerId]->config.executor_info();
   }
 
-  return ioSwitchboard->prepare(
-      executorInfo,
-      container->config.directory(),
-      container->config.has_user()
-        ? Option<string>(container->config.user())
-        : None())
-    .then(defer(
-        self(),
-        [=](const IOSwitchboard::SubprocessInfo& subprocessInfo)
-          -> Future<bool> {
-    if (!containers_.contains(containerId)) {
-      return Failure("Container destroyed during preparing");
-    }
+  // Use a pipe to block the child until it's been isolated.
+  // The `pipes` array is captured later in a lambda.
+  std::array<int, 2> pipes;
 
-    if (containers_.at(containerId)->state == DESTROYING) {
-      return Failure("Container is being destroyed during preparing");
-    }
+  // TODO(jmlvanre): consider returning failure if `pipe` gives an
+  // error. Currently we preserve the previous logic.
+  CHECK_SOME(os::pipe(pipes.data()));
 
-    const Owned<Container>& container = containers_.at(containerId);
+  // Prepare the flags to pass to the launch process.
+  MesosContainerizerLaunch::Flags launchFlags;
 
-    // Use a pipe to block the child until it's been isolated.
-    // The `pipes` array is captured later in a lambda.
-    std::array<int, 2> pipes;
-
-    // TODO(jmlvanre): consider returning failure if `pipe` gives an
-    // error. Currently we preserve the previous logic.
-    CHECK_SOME(os::pipe(pipes.data()));
-
-    // Prepare the flags to pass to the launch process.
-    MesosContainerizerLaunch::Flags launchFlags;
-
-    launchFlags.launch_info = JSON::protobuf(launchInfo);
+  launchFlags.launch_info = JSON::protobuf(launchInfo);
 
 #ifndef __WINDOWS__
-    launchFlags.pipe_read = pipes[0];
-    launchFlags.pipe_write = pipes[1];
+  launchFlags.pipe_read = pipes[0];
+  launchFlags.pipe_write = pipes[1];
 
-    // Set the `runtime_directory` launcher flag so that the launch
-    // helper knows where to checkpoint the status of the container
-    // once it exits.
-    const string runtimePath =
-      containerizer::paths::getRuntimePath(flags.runtime_dir, containerId);
+  // Set the `runtime_directory` launcher flag so that the launch
+  // helper knows where to checkpoint the status of the container
+  // once it exits.
+  const string runtimePath =
+    containerizer::paths::getRuntimePath(flags.runtime_dir, containerId);
 
-    CHECK(os::exists(runtimePath));
+  CHECK(os::exists(runtimePath));
 
-    launchFlags.runtime_directory = runtimePath;
+  launchFlags.runtime_directory = runtimePath;
 #else
-    // NOTE: On windows we need to pass `Handle`s between processes, as fds
-    // are not unique across processes.
-    launchFlags.pipe_read = os::fd_to_handle(pipes[0]);
-    launchFlags.pipe_write = os::fd_to_handle(pipes[1]);
+  // NOTE: On windows we need to pass `Handle`s between processes, as fds
+  // are not unique across processes.
+  launchFlags.pipe_read = os::fd_to_handle(pipes[0]);
+  launchFlags.pipe_write = os::fd_to_handle(pipes[1]);
 #endif // __WINDOWS
 
-    VLOG(1) << "Launching '" << MESOS_CONTAINERIZER << "' with flags '"
-            << launchFlags << "'";
+  VLOG(1) << "Launching '" << MESOS_CONTAINERIZER << "' with flags '"
+          << launchFlags << "'";
 
-    Option<int> _enterNamespaces;
-    Option<int> _cloneNamespaces;
+  Option<int> _enterNamespaces;
+  Option<int> _cloneNamespaces;
 
-    foreach (int ns, enterNamespaces) {
-      _enterNamespaces = _enterNamespaces.isSome()
-        ? _enterNamespaces.get() | ns
-        : ns;
-    }
+  foreach (int ns, enterNamespaces) {
+    _enterNamespaces = _enterNamespaces.isSome()
+      ? _enterNamespaces.get() | ns
+      : ns;
+  }
 
-    foreach (int ns, cloneNamespaces) {
-      _cloneNamespaces = _cloneNamespaces.isSome()
-        ? _cloneNamespaces.get() | ns
-        : ns;
-    }
+  foreach (int ns, cloneNamespaces) {
+    _cloneNamespaces = _cloneNamespaces.isSome()
+      ? _cloneNamespaces.get() | ns
+      : ns;
+  }
 
 #ifdef __linux__
-    // For now we need to special case entering a parent container's
-    // mount namespace. We do this to ensure that we have access to
-    // the binary we launch with `launcher->fork()`.
-    //
-    // TODO(klueska): Remove this special case once we pull
-    // the container's `init` process out of its container.
-    if (_enterNamespaces.isSome() && (_enterNamespaces.get() & CLONE_NEWNS)) {
-      CHECK(containerId.has_parent());
+  // For now we need to special case entering a parent container's
+  // mount namespace. We do this to ensure that we have access to
+  // the binary we launch with `launcher->fork()`.
+  //
+  // TODO(klueska): Remove this special case once we pull
+  // the container's `init` process out of its container.
+  if (_enterNamespaces.isSome() && (_enterNamespaces.get() & CLONE_NEWNS)) {
+    CHECK(containerId.has_parent());
 
-      if (!containers_.contains(containerId.parent())) {
-        return Failure("Unknown parent container");
-      }
-
-      if (containers_.at(containerId.parent())->pid.isNone()) {
-        return Failure("Unknown parent container pid");
-      }
-
-      pid_t parentPid = containers_.at(containerId.parent())->pid.get();
-
-      Try<pid_t> mountNamespaceTarget = getMountNamespaceTarget(parentPid);
-      if (mountNamespaceTarget.isError()) {
-        return Failure(
-            "Cannot get target mount namespace from "
-            "process " + stringify(parentPid));
-      }
-
-      launchFlags.namespace_mnt_target = mountNamespaceTarget.get();
-      _enterNamespaces = _enterNamespaces.get() & ~CLONE_NEWNS;
+    if (!containers_.contains(containerId.parent())) {
+      return Failure("Unknown parent container");
     }
+
+    if (containers_.at(containerId.parent())->pid.isNone()) {
+      return Failure("Unknown parent container pid");
+    }
+
+    pid_t parentPid = containers_.at(containerId.parent())->pid.get();
+
+    Try<pid_t> mountNamespaceTarget = getMountNamespaceTarget(parentPid);
+    if (mountNamespaceTarget.isError()) {
+      return Failure(
+          "Cannot get target mount namespace from "
+          "process " + stringify(parentPid));
+    }
+
+    launchFlags.namespace_mnt_target = mountNamespaceTarget.get();
+    _enterNamespaces = _enterNamespaces.get() & ~CLONE_NEWNS;
+  }
 #endif // __linux__
 
-    // Passing the launch flags via environment variables to the
-    // launch helper due to the sensitivity of those flags. Otherwise
-    // the launch flags would have been visible through commands like
-    // `ps` which are not protected from unprivileged users on the
-    // host.
-    map<string, string> launchEnvironment =
-      launchFlags.exportEnvironment("MESOS_CONTAINERIZER_");
+  // Passing the launch flags via environment variables to the launch
+  // helper due to the sensitivity of those flags. Otherwise the
+  // launch flags would have been visible through commands like `ps`
+  // which are not protected from unprivileged users on the host.
+  map<string, string> _launchEnvironment =
+    launchFlags.exportEnvironment("MESOS_CONTAINERIZER_");
 
-    // The launch helper should inherit the agent's environment.
-    map<string, string> slaveEnvironment = os::environment();
-    launchEnvironment.insert(slaveEnvironment.begin(), slaveEnvironment.end());
+  // The launch helper should inherit the agent's environment.
+  map<string, string> slaveEnvironment = os::environment();
+  _launchEnvironment.insert(slaveEnvironment.begin(), slaveEnvironment.end());
 
-    // Fork the child using launcher.
-    vector<string> argv(2);
-    argv[0] = MESOS_CONTAINERIZER;
-    argv[1] = MesosContainerizerLaunch::NAME;
+  // Fork the child using launcher.
+  vector<string> argv(2);
+  argv[0] = MESOS_CONTAINERIZER;
+  argv[1] = MesosContainerizerLaunch::NAME;
 
-    Try<pid_t> forked = launcher->fork(
-        containerId,
-        path::join(flags.launcher_dir, MESOS_CONTAINERIZER),
-        argv,
-        Subprocess::IO(subprocessInfo.in),
-        Subprocess::IO(subprocessInfo.out),
-        Subprocess::IO(subprocessInfo.err),
-        nullptr,
-        launchEnvironment,
-        // 'enterNamespaces' will be ignored by PosixLauncher.
-        _enterNamespaces,
-        // 'cloneNamespaces' will be ignored by PosixLauncher.
-        _cloneNamespaces);
+  Try<pid_t> forked = launcher->fork(
+      containerId,
+      path::join(flags.launcher_dir, MESOS_CONTAINERIZER),
+      argv,
+      in.isSome() ? in.get() : Subprocess::FD(STDIN_FILENO),
+      out.isSome() ? out.get() : Subprocess::FD(STDOUT_FILENO),
+      err.isSome() ? err.get() : Subprocess::FD(STDERR_FILENO),
+      nullptr,
+      _launchEnvironment,
+      // 'enterNamespaces' will be ignored by PosixLauncher.
+      _enterNamespaces,
+      // 'cloneNamespaces' will be ignored by PosixLauncher.
+      _cloneNamespaces);
 
-    if (forked.isError()) {
-      return Failure("Failed to fork: " + forked.error());
-    }
+  if (forked.isError()) {
+    return Failure("Failed to fork: " + forked.error());
+  }
 
-    pid_t pid = forked.get();
-    container->pid = pid;
+  pid_t pid = forked.get();
+  container->pid = pid;
 
-    // Checkpoint the forked pid if requested by the agent.
-    if (checkpoint) {
-      const string& path = slave::paths::getForkedPidPath(
-          slave::paths::getMetaRootDir(flags.work_dir),
-          slaveId,
-          container->config.executor_info().framework_id(),
-          container->config.executor_info().executor_id(),
-          containerId);
+  // Checkpoint the forked pid if requested by the agent.
+  if (checkpoint) {
+    const string& path = slave::paths::getForkedPidPath(
+        slave::paths::getMetaRootDir(flags.work_dir),
+        slaveId,
+        container->config.executor_info().framework_id(),
+        container->config.executor_info().executor_id(),
+        containerId);
 
-      LOG(INFO) << "Checkpointing container's forked pid " << pid
-                << " to '" << path <<  "'";
-
-      Try<Nothing> checkpointed =
-        slave::state::checkpoint(path, stringify(pid));
-
-      if (checkpointed.isError()) {
-        LOG(ERROR) << "Failed to checkpoint container's forked pid to '"
-                   << path << "': " << checkpointed.error();
-
-        return Failure("Could not checkpoint container's pid");
-      }
-    }
-
-    // Checkpoint the forked pid to the container runtime directory.
-    //
-    // NOTE: This checkpoint MUST happen after checkpointing the `pid`
-    // to the meta directory above. This ensures that there will never
-    // be a pid checkpointed to the container runtime directory until
-    // after it has been checkpointed in the agent's meta directory.
-    // By maintaining this invariant we know that the only way a `pid`
-    // could ever exist in the runtime directory and NOT in the agent
-    // meta directory is if the meta directory was wiped clean for
-    // some reason. As such, we know if we run into this situation
-    // that it is safe to treat the relevant containers as orphans and
-    // destroy them.
-    const string pidPath = path::join(
-        containerizer::paths::getRuntimePath(flags.runtime_dir, containerId),
-        containerizer::paths::PID_FILE);
+    LOG(INFO) << "Checkpointing container's forked pid " << pid
+              << " to '" << path <<  "'";
 
     Try<Nothing> checkpointed =
-      slave::state::checkpoint(pidPath, stringify(pid));
+      slave::state::checkpoint(path, stringify(pid));
 
     if (checkpointed.isError()) {
-      return Failure("Failed to checkpoint the container pid to"
-                     " '" + pidPath + "': " + checkpointed.error());
+      LOG(ERROR) << "Failed to checkpoint container's forked pid to '"
+                 << path << "': " << checkpointed.error();
+
+      return Failure("Could not checkpoint container's pid");
     }
+  }
 
-    // Monitor the forked process's pid. We keep the future because
-    // we'll refer to it again during container destroy.
-    container->status = reap(containerId, pid);
-    container->status->onAny(defer(self(), &Self::reaped, containerId));
+  // Checkpoint the forked pid to the container runtime directory.
+  //
+  // NOTE: This checkpoint MUST happen after checkpointing the `pid`
+  // to the meta directory above. This ensures that there will never
+  // be a pid checkpointed to the container runtime directory until
+  // after it has been checkpointed in the agent's meta directory.
+  // By maintaining this invariant we know that the only way a `pid`
+  // could ever exist in the runtime directory and NOT in the agent
+  // meta directory is if the meta directory was wiped clean for
+  // some reason. As such, we know if we run into this situation
+  // that it is safe to treat the relevant containers as orphans and
+  // destroy them.
+  const string pidPath = path::join(
+      containerizer::paths::getRuntimePath(flags.runtime_dir, containerId),
+      containerizer::paths::PID_FILE);
 
-    return isolate(containerId, pid)
-      .then(defer(self(),
-                  &Self::fetch,
-                  containerId,
-                  slaveId))
-      .then(defer(self(), &Self::exec, containerId, pipes[1]))
-      .onAny([pipes]() { os::close(pipes[0]); })
-      .onAny([pipes]() { os::close(pipes[1]); });
-  }));
+  Try<Nothing> checkpointed =
+    slave::state::checkpoint(pidPath, stringify(pid));
+
+  if (checkpointed.isError()) {
+    return Failure("Failed to checkpoint the container pid to"
+                   " '" + pidPath + "': " + checkpointed.error());
+  }
+
+  // Monitor the forked process's pid. We keep the future because
+  // we'll refer to it again during container destroy.
+  container->status = reap(containerId, pid);
+  container->status->onAny(defer(self(), &Self::reaped, containerId));
+
+  return isolate(containerId, pid)
+    .then(defer(self(),
+                &Self::fetch,
+                containerId,
+                slaveId))
+    .then(defer(self(), &Self::exec, containerId, pipes[1]))
+    .onAny([pipes]() { os::close(pipes[0]); })
+    .onAny([pipes]() { os::close(pipes[1]); });
 }
 
 

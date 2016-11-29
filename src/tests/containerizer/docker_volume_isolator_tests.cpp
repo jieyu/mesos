@@ -29,8 +29,6 @@
 #include "slave/containerizer/mesos/containerizer.hpp"
 #include "slave/containerizer/mesos/linux_launcher.hpp"
 
-#include "slave/containerizer/mesos/io/switchboard.hpp"
-
 #include "slave/containerizer/mesos/isolators/docker/runtime.hpp"
 
 #include "slave/containerizer/mesos/isolators/docker/volume/driver.hpp"
@@ -51,8 +49,6 @@ using std::string;
 using std::vector;
 
 using mesos::internal::master::Master;
-
-using mesos::internal::slave::IOSwitchboard;
 
 using mesos::internal::slave::DockerRuntimeIsolatorProcess;
 using mesos::internal::slave::DockerVolumeIsolatorProcess;
@@ -195,14 +191,6 @@ protected:
 
     Owned<Launcher> launcher(launcher_.get());
 
-    Try<Owned<IOSwitchboard>> ioSwitchboard =
-      IOSwitchboard::create(flags, false);
-
-    if (ioSwitchboard.isError()) {
-      return Error("Failed to create container io switchboard:"
-                   " " + ioSwitchboard.error());
-    }
-
     Try<Owned<Provisioner>> provisioner = Provisioner::create(flags);
     if (provisioner.isError()) {
       return Error("Failed to create provisioner: " + provisioner.error());
@@ -212,7 +200,6 @@ protected:
         new MesosContainerizer(
             flags,
             &fetcher,
-            std::move(ioSwitchboard.get()),
             std::move(launcher),
             provisioner->share(),
             {std::move(linuxIsolator),
