@@ -31,7 +31,7 @@ Mesos supports the following built-in isolators.
 - cgroups/blkio
 - [cgroups/cpu](isolators/cgroups-cpu.md)
 - cgroups/cpuset
-- cgroups/devices
+- [cgroups/devices](isolators/cgroups-devices.md)
 - cgroups/hugetlb
 - cgroups/mem
 - [cgroups/net_cls](isolators/cgroups-net-cls.md)
