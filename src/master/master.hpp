@@ -147,6 +147,11 @@ struct Slave
   void removeTask(Task* task);
 
   void addOfferOperation(OfferOperation* operation);
+
+  void recoverResources(OfferOperation* operation);
+
+  void removeOfferOperation(OfferOperation* operation);
+
   OfferOperation* getOfferOperation(const UUID& uuid) const;
 
   void addOffer(Offer* offer);
@@ -241,9 +246,9 @@ struct Slave
   // Active inverse offers on this slave.
   hashset<InverseOffer*> inverseOffers;
 
-  // Resources for active task / executors. Note that we maintain multiple
-  // copies of each shared resource in `usedResources` as they are used by
-  // multiple tasks.
+  // Resources for active task / executors / offer operations.
+  // Note that we maintain multiple copies of each shared resource in
+  // `usedResources` as they are used by multiple tasks.
   hashmap<FrameworkID, Resources> usedResources;
 
   Resources offeredResources; // Offers.
@@ -879,9 +884,14 @@ protected:
 
   // Transitions the offer operation, and recovers resources if the
   // offer operation becomes terminal.
+  // If framework is a nullptr, the operation update will be treated
+  // as an update from an operator call.
   void updateOfferOperation(
       OfferOperation* operation,
       OfferOperationStatusUpdate update);
+
+  // Remove the offer operation.
+  void removeOfferOperation(OfferOperation* operation);
 
   // Attempts to update the allocator by applying the given operation.
   // If successful, updates the slave's resources, sends a
@@ -924,7 +934,10 @@ private:
   // Updates the slave's resources by applying the given operation.
   // It also sends a 'CheckpointResourcesMessage' to the slave with
   // the updated checkpointed resources.
-  void _apply(Slave* slave, const Offer::Operation& operation);
+  void _apply(
+      Slave* slave,
+      Framework* framework,
+      const Offer::Operation& operation);
 
   void drop(
       const process::UPID& from,
@@ -2744,14 +2757,146 @@ struct Framework
 
   void addOfferOperation(OfferOperation* operation)
   {
+    CHECK(operation->has_framework_id());
+
+    const FrameworkID& frameworkId = operation->framework_id();
+
     Try<UUID> uuid = UUID::fromBytes(operation->operation_uuid());
     CHECK_SOME(uuid);
+
+    CHECK(!offerOperations.contains(uuid.get()))
+      << "Duplicate offer operation '" << operation->info().id()
+      << "' (uuid: " << uuid->toString() << ") "
+      << "of framework " << frameworkId;
 
     offerOperations.put(uuid.get(), operation);
 
     if (operation->info().has_id()) {
       offerOperationUUIDs.put(operation->info().id(), uuid.get());
     }
+
+    if (!protobuf::isTerminalState(operation->latest_status().state())) {
+      Resource consumed;
+      switch (operation->info().type()) {
+        case Offer::Operation::RESERVE:
+        case Offer::Operation::UNRESERVE:
+        case Offer::Operation::CREATE:
+        case Offer::Operation::DESTROY:
+        case Offer::Operation::LAUNCH:
+        case Offer::Operation::LAUNCH_GROUP:
+          // These operations don't change used resources.
+          return;
+        case Offer::Operation::CREATE_VOLUME:
+          consumed = operation->info().create_volume().source();
+          break;
+        case Offer::Operation::DESTROY_VOLUME:
+          consumed = operation->info().destroy_volume().volume();
+          break;
+        case Offer::Operation::CREATE_BLOCK:
+          consumed = operation->info().create_block().source();
+          break;
+        case Offer::Operation::DESTROY_BLOCK:
+          consumed = operation->info().destroy_block().block();
+          break;
+        case Offer::Operation::UNKNOWN:
+          LOG(ERROR) << "Unknown offer operation";
+          return;
+      }
+
+      CHECK(operation->has_slave_id())
+        << "External resource provider is not supported yet";
+
+      const SlaveID& slaveId = operation->slave_id();
+
+      totalUsedResources += consumed;
+      usedResources[slaveId] += consumed;
+
+      // It's possible that we're not tracking the role from the
+      // resources in the offer operation for this framework if the
+      // role is absent from the framework's set of roles. In this
+      // case, we track the role's allocation for this framework.
+      const std::string& role = consumed.allocation_info().role();
+
+      if (!isTrackedUnderRole(role)) {
+        trackUnderRole(role);
+      }
+    }
+  }
+
+  void recoverResources(OfferOperation* operation)
+  {
+    CHECK(operation->has_slave_id())
+      << "External resource provider is not supported yet";
+
+    const SlaveID& slaveId = operation->slave_id();
+
+    Resource consumed;
+    switch (operation->info().type()) {
+      case Offer::Operation::LAUNCH:
+      case Offer::Operation::LAUNCH_GROUP:
+      case Offer::Operation::RESERVE:
+      case Offer::Operation::UNRESERVE:
+      case Offer::Operation::CREATE:
+      case Offer::Operation::DESTROY:
+        // These operations don't change used resources.
+        return;
+      case Offer::Operation::CREATE_VOLUME:
+        consumed = operation->info().create_volume().source();
+        break;
+      case Offer::Operation::DESTROY_VOLUME:
+        consumed = operation->info().destroy_volume().volume();
+        break;
+      case Offer::Operation::CREATE_BLOCK:
+        consumed = operation->info().create_block().source();
+        break;
+      case Offer::Operation::DESTROY_BLOCK:
+        consumed = operation->info().destroy_block().block();
+        break;
+      case Offer::Operation::UNKNOWN:
+        LOG(WARNING) << "Ignoring unknown offer operation";
+        return;
+    }
+
+    CHECK(usedResources[slaveId].contains(consumed))
+      << "Unknown resources " << consumed << " of agent " << slaveId;
+
+    totalUsedResources -= consumed;
+    usedResources[slaveId] -= consumed;
+    if (usedResources[slaveId].empty()) {
+      usedResources.erase(slaveId);
+    }
+
+    // If we are no longer subscribed to the role to which these
+    // resources are being returned to, and we have no more resources
+    // allocated to us for that role, stop tracking the framework
+    // under the role.
+    const std::string& role = consumed.allocation_info().role();
+
+    auto allocatedToRole = [&role](const Resource& resource) {
+      return resource.allocation_info().role() == role;
+    };
+
+    if (roles.count(role) == 0 &&
+        totalUsedResources.filter(allocatedToRole).empty()) {
+      CHECK(totalOfferedResources.filter(allocatedToRole).empty());
+      untrackUnderRole(role);
+    }
+  }
+
+  void removeOfferOperation(OfferOperation* operation)
+  {
+    Try<UUID> uuid = UUID::fromBytes(operation->operation_uuid());
+    CHECK_SOME(uuid);
+
+    CHECK(offerOperations.contains(uuid.get()))
+      << "Unknown offer operation '" << operation->info().id()
+      << "' (uuid: " << uuid->toString() << ") "
+      << "of framework " << operation->framework_id();
+
+    CHECK(protobuf::isTerminalState(operation->latest_status().state()))
+      << operation->latest_status().state();
+
+    offerOperations.erase(uuid.get());
   }
 
   const FrameworkID id() const { return info.id(); }
@@ -3039,7 +3184,7 @@ struct Framework
   // TODO(mpark): Strip the non-scalar resources out of the totals
   // in order to avoid reporting incorrect statistics (MESOS-2623).
 
-  // Active task / executor resources.
+  // Active task / executor / offer operation resources.
   Resources totalUsedResources;
 
   // Note that we maintain multiple copies of each shared resource in
