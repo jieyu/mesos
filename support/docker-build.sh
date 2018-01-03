@@ -201,6 +201,9 @@ docker build --no-cache=true -t $TAG .
 # Set a trap to delete the image on exit.
 trap "docker rmi --force $TAG" EXIT
 
+python -c 'import os,sys,fcntl; flags = fcntl.fcntl(sys.stdout, fcntl.F_GETFL); print(flags&os.O_NONBLOCK);'
+python -c 'import os,sys,fcntl; flags = fcntl.fcntl(sys.stderr, fcntl.F_GETFL); print(flags&os.O_NONBLOCK);'
+
 # Uncomment below to print kernel log incase of failures.
 # trap "dmesg" ERR
 
