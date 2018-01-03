@@ -157,7 +157,8 @@ else
     # Build and check Mesos.
     case $BUILDTOOL in
       autotools)
-	append_dockerfile "CMD ./bootstrap && ./configure $CONFIGURATION && make -j$JOBS distcheck 2>&1"
+	append_dockerfile "CMD ./bootstrap && ./configure $CONFIGURATION && make -j$JOBS distcheck 2>&1 >log"
+	append_dockerfile "CMD tail -n 100 log"
 	;;
       cmake)
 	# Transform autotools-like parameters to cmake-like.
@@ -199,7 +200,7 @@ TAG=mesos-`date +%s`-$RANDOM
 docker build --no-cache=true -t $TAG .
 
 # Set a trap to delete the image on exit.
-trap "docker rmi $TAG" EXIT
+trap "docker rmi --force $TAG" EXIT
 
 # Uncomment below to print kernel log incase of failures.
 # trap "dmesg" ERR
