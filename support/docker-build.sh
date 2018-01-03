@@ -157,7 +157,7 @@ else
     # Build and check Mesos.
     case $BUILDTOOL in
       autotools)
-	append_dockerfile "CMD ./bootstrap && ./configure $CONFIGURATION && make -j$JOBS distcheck 2>&1 >log"
+	append_dockerfile "CMD ./bootstrap && ./configure $CONFIGURATION && make -j$JOBS distcheck >log"
 	append_dockerfile "CMD tail -n 100 log"
 	;;
       cmake)
