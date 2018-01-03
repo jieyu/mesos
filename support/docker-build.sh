@@ -157,7 +157,7 @@ else
     # Build and check Mesos.
     case $BUILDTOOL in
       autotools)
-	append_dockerfile "CMD ./bootstrap && ./configure $CONFIGURATION && make -j$JOBS distcheck 2>&1 >log; EXITCODE=$?; tail -n 100 log; exit $EXITCODE"
+	append_dockerfile "CMD ./bootstrap && ./configure $CONFIGURATION && make -j$JOBS distcheck &> log; EXITCODE=$?; tail -n 500 log; exit $EXITCODE"
 	;;
       cmake)
 	# Transform autotools-like parameters to cmake-like.
@@ -181,7 +181,7 @@ else
 
 	# MESOS-5433: `distcheck` is not supported.
 	# MESOS-5624: In source build is not supported.
-	append_dockerfile "CMD mkdir build && cd build && cmake $CONFIGURATION .. && make -j$JOBS check 2>&1 >log; EXITCODE=$?; tail -n 100 log; exit $EXITCODE"
+	append_dockerfile "CMD mkdir build && cd build && cmake $CONFIGURATION .. && make -j$JOBS check &> log; EXITCODE=$?; tail -n 500 log; exit $EXITCODE"
 	;;
       *)
 	echo "Unknown build tool $BUILDTOOL"
@@ -189,9 +189,6 @@ else
 	;;
     esac
 fi
-
-python -c 'import os,sys,fcntl; flags = fcntl.fcntl(sys.stdout, fcntl.F_GETFL); print(flags&os.O_NONBLOCK);'
-python -c 'import os,sys,fcntl; flags = fcntl.fcntl(sys.stderr, fcntl.F_GETFL); print(flags&os.O_NONBLOCK);'
 
 # Generate a random image tag.
 TAG=mesos-`date +%s`-$RANDOM
