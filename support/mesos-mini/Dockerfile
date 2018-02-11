@@ -1,5 +1,7 @@
 FROM mesos/mesos-centos
 
+RUN yum install -y java-1.8.0-openjdk
+
 # Prepare systemd environment.
 ENV container docker
 
