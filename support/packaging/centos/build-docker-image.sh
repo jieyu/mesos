@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -o errexit -o nounset -o pipefail -o verbose
+
 # This script builds a CentOS based docker image with Mesos installed
 # using the current head of the source tree.
 
@@ -37,14 +39,14 @@ docker build \
   "${SOURCE_DIR}/support/packaging/centos/"
 
 # Build the RPM.
-UID=`id -u`
-GID=`id -g`
+USER_ID=`id -u`
+GROUP_ID=`id -g`
 
 docker run \
   --rm \
   -v "${SOURCE_DIR}:${SOURCE_DIR}" \
-  ${DOCKER_IMAGE_PACKAGING} \
-  /bin/bash -c "${SOURCE_DIR}/support/packaging/centos/build_rpm.sh && chown -R ${UID}:${GID} ${SOURCE_DIR}/centos7"
+  ${DOCKER_IMAGE_PACKAGING}:${DOCKER_IMAGE_TAG} \
+  /bin/bash -c "${SOURCE_DIR}/support/packaging/centos/build_rpm.sh && chown -R ${USER_ID}:${GROUP_ID} ${SOURCE_DIR}/centos7"
 
 # Build the image for running Mesos.
 cp "${SOURCE_DIR}/centos7/rpmbuild/RPMS/x86_64/*.rpm" "${TMP_BUILD_DIR}"
