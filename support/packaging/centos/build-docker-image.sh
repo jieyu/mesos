@@ -49,7 +49,7 @@ docker run \
   /bin/bash -c "${SOURCE_DIR}/support/packaging/centos/build_rpm.sh && chown -R ${USER_ID}:${GROUP_ID} ${SOURCE_DIR}/centos7"
 
 # Build the image for running Mesos.
-cp "${SOURCE_DIR}/centos7/rpmbuild/RPMS/x86_64/*.rpm" "${TMP_BUILD_DIR}"
+cp "${SOURCE_DIR}"/centos7/rpmbuild/RPMS/x86_64/*.rpm "${TMP_BUILD_DIR}"
 
 cat <<EOF > "${TMP_BUILD_DIR}/Dockerfile"
 FROM centos:7
