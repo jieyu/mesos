@@ -23,4 +23,5 @@ DOCKER_IMAGE_DISTRO=${DOCKER_IMAGE_DISTRO} \
 DOCKER_IMAGE_TAG=${DOCKER_IMAGE_TAG} \
 "${SUPPORT_DIR}/packaging/centos/build-docker-image.sh"
 
+docker tag ${DOCKER_IMAGE_DISTRO}:${DOCKER_IMAGE_TAG} "mesos/mesos-centos"
 docker build -t ${DOCKER_IMAGE_MINI}:${DOCKER_IMAGE_TAG} "${CURRENT_DIR}/"
