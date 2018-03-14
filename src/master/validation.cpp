@@ -1501,10 +1501,6 @@ Option<Error> validateTask(
   }
 
   if (task.has_container()) {
-    if (task.container().network_infos().size() > 0) {
-      return Error("NetworkInfos must not be set on the task");
-    }
-
     if (task.container().type() == ContainerInfo::DOCKER) {
       return Error("Docker ContainerInfo is not supported on the task");
     }
