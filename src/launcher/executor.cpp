@@ -125,6 +125,7 @@ class CommandExecutor: public ProtobufProcess<CommandExecutor>
 public:
   CommandExecutor(
       const string& _launcherDir,
+      const Option<string>& _initPath,
       const Option<string>& _rootfs,
       const Option<string>& _sandboxDirectory,
       const Option<string>& _workingDirectory,
@@ -151,6 +152,7 @@ public:
       frameworkInfo(None()),
       taskId(None()),
       launcherDir(_launcherDir),
+      initPath(_initPath),
       rootfs(_rootfs),
       sandboxDirectory(_sandboxDirectory),
       workingDirectory(_workingDirectory),
@@ -410,6 +412,7 @@ protected:
   static pid_t launchTaskSubprocess(
       const CommandInfo& command,
       const string& launcherDir,
+      const Option<string>& initPath,
       const Environment& environment,
       const Option<string>& user,
       const Option<string>& rootfs,
@@ -500,7 +503,9 @@ protected:
     // log output of possibly sensitive data. See MESOS-7292.
     string commandString = strings::format(
         "%s %s <POSSIBLY-SENSITIVE-DATA>",
-        path::join(launcherDir, MESOS_CONTAINERIZER),
+        initPath.isSome()
+          ? initPath.get()
+          : path::join(launcherDir, MESOS_CONTAINERIZER),
         MesosContainerizerLaunch::NAME).get();
 
     LOG(INFO) << "Running '" << commandString << "'";
@@ -526,7 +531,9 @@ protected:
     }
 
     Try<Subprocess> s = subprocess(
-        path::join(launcherDir, MESOS_CONTAINERIZER),
+        initPath.isSome()
+          ? initPath.get()
+          : path::join(launcherDir, MESOS_CONTAINERIZER),
         argv,
         Subprocess::FD(STDIN_FILENO),
         Subprocess::FD(STDOUT_FILENO),
@@ -693,6 +700,7 @@ protected:
     pid = launchTaskSubprocess(
         command,
         launcherDir,
+        initPath,
         launchEnvironment,
         user,
         rootfs,
@@ -1223,6 +1231,7 @@ private:
   Option<FrameworkInfo> frameworkInfo;
   Option<TaskID> taskId;
   string launcherDir;
+  Option<string> initPath;
   Option<string> rootfs;
   Option<string> sandboxDirectory;
   Option<string> workingDirectory;
@@ -1305,6 +1314,10 @@ public:
         "Directory path of Mesos binaries.",
         PKGLIBEXECDIR);
 
+    add(&Flags::init_path,
+        "init_path",
+        "The path of container init process binary");
+
     // TODO(nnielsen): Add 'prefix' option to enable replacing
     // 'sh -c' with user specified wrapper.
   }
@@ -1320,6 +1333,7 @@ public:
   Option<string> tty_slave_path;
   Option<JSON::Object> task_launch_info;
   string launcher_dir;
+  Option<string> init_path;
 };
 
 
@@ -1401,6 +1415,7 @@ int main(int argc, char** argv)
   Owned<mesos::internal::CommandExecutor> executor(
       new mesos::internal::CommandExecutor(
           flags.launcher_dir,
+          flags.init_path,
           flags.rootfs,
           flags.sandbox_directory,
           flags.working_directory,

@@ -55,6 +55,10 @@
 
 #include "hook/manager.hpp"
 
+#ifdef __linux__
+#include "linux/memfd.hpp"
+#endif // __linux__
+
 #include "module/manager.hpp"
 
 #include "slave/gc.hpp"
@@ -587,6 +591,23 @@ Try<MesosContainerizer*> MesosContainerizer::create(
   _isolators.push_back(Owned<Isolator>(new MesosIsolator(
       Owned<MesosIsolatorProcess>(ioSwitchboard.get()))));
 
+  Option<string> initPath;
+
+#ifdef __linux__
+  // Clone the launcher binary in memory for security concerns.
+  Try<int_fd> memFd = memfd::cloneSealedFile(
+      path::join(flags.launcher_dir, MESOS_CONTAINERIZER));
+
+  if (memFd.isError()) {
+    return Error(
+        "Failed to clone a sealed file '" +
+        path::join(flags.launcher_dir, MESOS_CONTAINERIZER) + "' in memory: " +
+        memFd.error());
+  }
+
+  initPath = "/proc/self/fd/" + stringify(memFd.get());
+#endif // __linux__
+
   return new MesosContainerizer(Owned<MesosContainerizerProcess>(
       new MesosContainerizerProcess(
           flags,
@@ -595,7 +616,8 @@ Try<MesosContainerizer*> MesosContainerizer::create(
           ioSwitchboard.get(),
           launcher,
           provisioner,
-          _isolators)));
+          _isolators,
+          initPath)));
 }
 
 
@@ -1657,6 +1679,11 @@ Future<Containerizer::LaunchResult> MesosContainerizerProcess::_launch(
     }
   }
 
+  if (container->config->has_task_info() && initPath.isSome()) {
+    launchInfo.mutable_command()->add_arguments(
+        "--init_path=" + initPath.get());
+  }
+
   // For command tasks specifically, we should add the task_environment
   // flag to the launch command of the command executor.
   // TODO(tillt): Remove this once we no longer support the old style
@@ -2035,7 +2062,10 @@ Future<Containerizer::LaunchResult> MesosContainerizerProcess::_launch(
 
   // Fork the child using launcher.
   vector<string> argv(2);
-  argv[0] = path::join(flags.launcher_dir, MESOS_CONTAINERIZER);
+  argv[0] = initPath.isSome()
+    ? initPath.get()
+    : path::join(flags.launcher_dir, MESOS_CONTAINERIZER);
+
   argv[1] = MesosContainerizerLaunch::NAME;
 
   Try<pid_t> forked = launcher->fork(
